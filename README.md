@@ -1,6 +1,9 @@
 # G7 Solar Panel Cleaning Robot - System Documentation
 
-This repository contains the firmware and dashboard for the G7 Solar Panel Cleaning Robot. The robot features manual RC gamepad control over WiFi and an autonomous safety cliff-detection and evasion system powered by four FS80NK infrared proximity sensors.
+This repository contains the firmware and dashboard for the G7 Solar Panel Cleaning Robot in two distinct system architectures:
+
+1. **Open-Loop Version** ([SolarPanelG7RC.ino](file:///c:/Users/Victus/OneDrive/Desktop/IDP/SolarPanelG7RC/SolarPanelG7RC.ino)): Focuses on manual remote control (RC) and the autonomous safety cliff-detection and evasion system powered by four FS80NK infrared proximity sensors.
+2. **Closed-Loop Version** (in the [SolarPanelG7RC_ClosedLoop](file:///c:/Users/Victus/OneDrive/Desktop/IDP/SolarPanelG7RC/SolarPanelG7RC_ClosedLoop) folder): Re-integrates the **GY-85 9DOF IMU** to add **Straight-Line Assist (Heading Lock)** and **Slope-Speed Compensation** with real-time web-adjustable PID sliders. See the [Closed-Loop README](file:///c:/Users/Victus/OneDrive/Desktop/IDP/SolarPanelG7RC/SolarPanelG7RC_ClosedLoop/README.md) for full details.
 
 ---
 
