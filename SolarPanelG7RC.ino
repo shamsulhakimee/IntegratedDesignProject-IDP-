@@ -52,6 +52,7 @@ enum SafetyState {
 
 SafetyState safetyState = STATE_NORMAL;
 unsigned long safetyTimer = 0;
+bool safetyModeActive = false; // Normal Mode = false (Safety bypassed), Safety/Cleaning Mode = true
 
 // ==================== Playback & Preset Globals ====================
 #define MAX_STEPS 3000
@@ -73,6 +74,7 @@ const char* htmlPage = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>G7 Solar Robot Safety Dashboard</title>
   <style>
@@ -470,8 +472,10 @@ const char* htmlPage = R"rawliteral(
           <div id="sensor-br" class="sensor-indicator br" title="Back-Right Sensor">BR</div>
         </div>
       </div>
-      <div class="safety-status-box">
-        System Status: <span id="safetyStateText" class="status-normal">NORMAL</span>
+      <div class="safety-status-box" style="display:flex; flex-direction:column; gap:8px;">
+        <div>System Status: <span id="safetyStateText" class="status-normal">NORMAL</span></div>
+        <div>Safety Mode: <span id="safetyModeText" style="font-weight:bold; color:#ff5252;">BYPASSED (NORMAL)</span></div>
+        <button id="btnToggleSafety" class="pbtn" style="background:linear-gradient(135deg,#00e676,#00c853); margin:0 auto; padding:6px 12px; font-size:12px;" onclick="toggleSafetyMode()">Enable Safety/Cleaning</button>
       </div>
     </div>
 
@@ -519,6 +523,8 @@ const char* htmlPage = R"rawliteral(
     // Playback and recording button edge-triggers
     let lastBtn0 = false; // Button A
     let lastBtn1 = false; // Button B
+    let lastBtn5 = false; // Button R1 (Right Bumper)
+    let safetyModeActive = false;
     let currentL = 0;
     let currentR = 0;
     let isRecording = false;
@@ -578,6 +584,7 @@ const char* htmlPage = R"rawliteral(
           // Gamepad edge-triggered button commands
           let btn0Pressed = gp.buttons[0] && gp.buttons[0].pressed; // Button A -> Record
           let btn1Pressed = gp.buttons[1] && gp.buttons[1].pressed; // Button B -> Play/Pause
+          let btn5Pressed = gp.buttons[5] && gp.buttons[5].pressed; // Button R1 (Right Bumper) -> Toggle Safety Mode
           
           if (btn0Pressed && !lastBtn0) {
             toggleRecording();
@@ -588,6 +595,11 @@ const char* htmlPage = R"rawliteral(
             togglePlayback();
           }
           lastBtn1 = btn1Pressed;
+
+          if (btn5Pressed && !lastBtn5) {
+            toggleSafetyMode();
+          }
+          lastBtn5 = btn5Pressed;
 
           let now = Date.now();
           let changed = (leftPWM !== lastSentL || rightPWM !== lastSentR || pump !== lastSentP);
@@ -639,6 +651,11 @@ const char* htmlPage = R"rawliteral(
             stateEl.className = (d.safety === 'SAFETY LOCK') ? 'status-danger' : 'status-warning';
             bannerEl.textContent = `⚠️ SAFETY INTERRUPT: ${d.safety} (RC DISABLED)`;
             bannerEl.classList.add('show');
+          }
+
+          if (d.safetyMode !== undefined) {
+            safetyModeActive = d.safetyMode;
+            updateSafetyModeUI(safetyModeActive);
           }
 
           // Playback sync (only if not recording locally)
@@ -708,6 +725,37 @@ const char* htmlPage = R"rawliteral(
         ind.className = `sensor-indicator ${suffix} safe`;
         txt.textContent = 'SAFE';
         txt.className = 'sensor-badge badge-safe';
+      }
+    }
+
+    function toggleSafetyMode() {
+      const nextActive = safetyModeActive ? 0 : 1;
+      fetch(`/set_safety?active=${nextActive}`)
+        .then(r => r.text())
+        .then(txt => {
+          if (txt === "OK") {
+            safetyModeActive = (nextActive === 1);
+            updateSafetyModeUI(safetyModeActive);
+          }
+        })
+        .catch(err => console.error("Toggle safety error:", err));
+    }
+
+    function updateSafetyModeUI(isActive) {
+      const modeText = EL("safetyModeText");
+      const btn = EL("btnToggleSafety");
+      if (modeText && btn) {
+        if (isActive) {
+          modeText.textContent = "ACTIVE (CLEANING)";
+          modeText.style.color = "#00e676"; // Green
+          btn.textContent = "Disable Safety/Cleaning";
+          btn.style.background = "linear-gradient(135deg, #ff1744, #d50000)"; // Red
+        } else {
+          modeText.textContent = "BYPASSED (NORMAL)";
+          modeText.style.color = "#ff5252"; // Red
+          btn.textContent = "Enable Safety/Cleaning";
+          btn.style.background = "linear-gradient(135deg, #00e676, #00c853)"; // Green
+        }
       }
     }
 
@@ -848,6 +896,15 @@ void setMotorsDirect(int left, int right);
 
 // ==================== Safety Evasion Logic ====================
 void updateSafety() {
+  if (!safetyModeActive) {
+    if (safetyState != STATE_NORMAL) {
+      setMotorsDirect(0, 0);
+      safetyState = STATE_NORMAL;
+      Serial.println("Safety Mode disabled. Resetting safety state to NORMAL.");
+    }
+    return;
+  }
+
   bool fl_cliff = (digitalRead(PIN_FS80NK_FL) == CLIFF_STATE);
   bool fr_cliff = (digitalRead(PIN_FS80NK_FR) == CLIFF_STATE);
   bool bl_cliff = (digitalRead(PIN_FS80NK_BL) == CLIFF_STATE);
@@ -1036,6 +1093,18 @@ void setup() {
     }
   });
 
+  server.on("/set_safety", HTTP_GET, []() {
+    if (server.hasArg("active")) {
+      int active = server.arg("active").toInt();
+      safetyModeActive = (active == 1);
+      Serial.print("Safety Mode changed: ");
+      Serial.println(safetyModeActive ? "ACTIVE (Safety/Cleaning)" : "BYPASSED (Normal)");
+      server.send(200, "text/plain", "OK");
+    } else {
+      server.send(400, "text/plain", "Bad Request");
+    }
+  });
+
   // --- HARDWARE DEBUG ENDPOINTS ---
   server.on("/testleft", HTTP_GET, []() {
     if (safetyState != STATE_NORMAL) {
@@ -1166,10 +1235,10 @@ void setup() {
       else playStatusText = "STOPPED";
     }
 
-    char json[250];
+    char json[350];
     snprintf(json, sizeof(json),
       "{\"fl\":%s,\"fr\":%s,\"bl\":%s,\"br\":%s,\"safety\":\"%s\","
-      "\"playStatus\":\"%s\",\"playIndex\":%d,\"playLen\":%d}",
+      "\"playStatus\":\"%s\",\"playIndex\":%d,\"playLen\":%d,\"safetyMode\":%s}",
       fl ? "true" : "false",
       fr ? "true" : "false",
       bl ? "true" : "false",
@@ -1177,7 +1246,8 @@ void setup() {
       safetyText,
       playStatusText,
       playbackIndex,
-      sequenceLength
+      sequenceLength,
+      safetyModeActive ? "true" : "false"
     );
     server.send(200, "application/json", json);
   });

@@ -99,3 +99,22 @@ The closed-loop version's dashboard is fully upgraded with:
 1. **Compass Card**: Integrates a virtual needle reflecting the magnetometer's azimuth.
 2. **3D Tilt Orientation Card**: Embeds a CSS 3D transformed disk displaying the physical inclination (pitch/roll) of the robot.
 3. **PID Tuning Card**: Adds interactive sliders to modify $K_p$, $K_i$, and $K_d$ values on the ESP32 in real time with a 150ms debouncer.
+
+---
+
+## 🛡️ Safety Override / Mode Switcher
+
+To prevent motor control lockouts when the **FS80NK cliff detection sensors** are physically disconnected (which otherwise pull the ESP32 input pins to the `CLIFF_STATE` and cause the system to think a cliff is constantly detected), we implemented a **Safety Mode Switcher**:
+* **Default Behavior**: On system boot, Safety Mode defaults to **Bypassed (Normal Mode)** (`safetyModeActive = false`). This ensures the robot is fully drivable immediately, ignoring the status of the cliff sensors.
+* **Safety/Cleaning Mode**: When activated, the safety state machine functions normally, triggering automatic reversing or turning behaviors whenever a cliff edge is detected.
+* **Switching Mechanisms**:
+  1. **Web UI Button**: Clicking the "Enable Safety/Cleaning" button on the dashboard toggles the mode. The UI immediately transitions to green and updates the button label to "Disable Safety/Cleaning".
+  2. **Game Controller**: Pressing the **Right Bumper / Button R1** (`gp.buttons[5]`) on an active gamepad toggles the mode instantly.
+* **Immediate Recovery**: If safety mode is bypassed while the robot is in a locked or evading safety state, the motor locks are immediately released, setting the state back to `STATE_NORMAL` and returning motor control to the remote control (RC) or playback routines.
+
+---
+
+## 🔠 Dashboard UTF-8 Charset Fix
+
+Previously, characters such as emojis (e.g., `🎮`, `🤖`, `⚠️`, `🧭`) could display as corrupt byte sequences (gibberish) depending on the user's browser language and default decoding settings. 
+* **Solution**: Explicitly added `<meta charset="UTF-8">` to the HTML `<head>` section in both standard (`SolarPanelG7RC.ino`) and closed-loop (`SolarPanelG7RC_ClosedLoop.ino`) firmware versions. This forces browsers to render Unicode symbols cleanly and reliably.
