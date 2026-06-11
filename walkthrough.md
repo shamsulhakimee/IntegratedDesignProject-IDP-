@@ -1,6 +1,6 @@
 # G7 Solar Panel Cleaning Robot - Walkthrough & System Explanation
 
-This walkthrough covers both the **FS80NK Cliff Detection and Evasion System** and the newly added **GY-85 Inertial Sensor Closed-Loop Feedback Control System**.
+This walkthrough covers the **FS80NK Cliff Detection and Evasion System**, the **GY-85 Inertial Sensor Closed-Loop Feedback Control System**, and the newly integrated **WiFi Diagnostics and Verbose Event Logging Systems**.
 
 ---
 
@@ -118,3 +118,31 @@ To prevent motor control lockouts when the **FS80NK cliff detection sensors** ar
 
 Previously, characters such as emojis (e.g., `🎮`, `🤖`, `⚠️`, `🧭`) could display as corrupt byte sequences (gibberish) depending on the user's browser language and default decoding settings. 
 * **Solution**: Explicitly added `<meta charset="UTF-8">` to the HTML `<head>` section in both standard (`SolarPanelG7RC.ino`) and closed-loop (`SolarPanelG7RC_ClosedLoop.ino`) firmware versions. This forces browsers to render Unicode symbols cleanly and reliably.
+
+---
+
+## 📶 WiFi Diagnostics & Verbose Event Logging
+
+We implemented a real-time WiFi telemetry reporting system and verbose firmware-level event logging:
+
+### 1. WiFi & Connection Quality Diagnostics
+- **Client RSSI (dBm)**: ESP32 queries the signal strength of the connected client station using `esp_wifi_ap_get_sta_list()` and reports it in the `/status` JSON response.
+- **Client Count**: Displays the number of connected stations via `WiFi.softAPgetStationNum()`.
+- **Latency (RTT) Feedback**: The browser tracks the latency of each `/status` poll and sends it back to the ESP32 via `/status?rtt=XXX`. If latency exceeds `350ms`, the ESP32 logs it automatically to prevent issues.
+- **WiFi Health Indicators**: The dashboard now visualizes:
+  - Real-time WiFi Signal Strength in dBm (color-coded: Green for strong signal, Yellow for medium, Red for weak).
+  - Connected Station count.
+
+### 2. Verbose Log Triggers
+We added descriptive categories and events logged directly in the ESP32 circular buffer:
+- `[REC] Saved preset: X steps` (when preset is saved)
+- `[REC] Preset cleared` (when cleared)
+- `[PLAY] Started playback` or `[PLAY] Resumed playback` (when playback starts/resumes)
+- `[PLAY] Playback paused at step X` (when playback is paused)
+- `[PLAY] Playback stopped` (when playback is stopped)
+- `[PLAY] Playback complete` (when playback reaches the end)
+- `[WiFi] Weak signal: -XX dBm` (warning logged when RSSI drops below -80 dBm)
+- `[WiFi] Signal restored` (logged when RSSI returns above -75 dBm)
+- `[WiFi] High latency: XXX ms` (logged when client-reported latency exceeds 350ms)
+
+All these categories are custom-styled (e.g. Violet for WiFi, Orange for REC, Cyan for PLAY) in the scrollable log card.
