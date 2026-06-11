@@ -82,6 +82,16 @@ bool isPausedPlayback = false;
 unsigned long lastPlaybackStepTime = 0;
 const unsigned long PLAYBACK_STEP_INTERVAL = 100; // 10 Hz (100ms)
 
+// ==================== Event Log Buffer ====================
+struct LogEntry {
+  char msg[80];
+  unsigned long ts;
+};
+#define LOG_BUFFER_SIZE 20
+LogEntry logBuffer[LOG_BUFFER_SIZE];
+int logHead = 0;
+int logCount = 0;
+
 // ==================== Dashboard HTML ====================
 const char* htmlPage = R"rawliteral(
 <!DOCTYPE html>
@@ -428,11 +438,107 @@ const char* htmlPage = R"rawliteral(
       border-radius: 5px;
       transition: width 0.1s linear;
     }
+
+    /* ===== System Health Bar ===== */
+    .health-bar {
+      display:flex;align-items:center;justify-content:space-between;gap:12px;
+      max-width:960px;margin:0 auto 16px auto;padding:12px 18px;
+      background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);
+      border-radius:14px;backdrop-filter:blur(12px);flex-wrap:wrap;
+    }
+    .health-pill {
+      display:flex;align-items:center;gap:8px;font-size:14px;font-weight:bold;
+      padding:6px 16px;border-radius:20px;border:2px solid;transition:all .3s;
+    }
+    .health-ok   { color:#00e676;border-color:#00e676;background:rgba(0,230,118,.1); }
+    .health-warn { color:#ffc107;border-color:#ffc107;background:rgba(255,193,7,.1);animation:text-pulse .8s infinite alternate; }
+    .health-fault{ color:#ff1744;border-color:#ff1744;background:rgba(255,23,68,.1);animation:text-pulse .4s infinite alternate; }
+    .health-meta { display:flex;align-items:center;gap:18px;flex-wrap:wrap; }
+    .meta-item   { display:flex;flex-direction:column;align-items:center;font-size:11px;color:#888;gap:3px; }
+    .meta-value  { font-size:13px;font-weight:bold;color:#ccc;font-family:monospace; }
+    .mbar-row    { display:flex;align-items:center;gap:6px;font-size:11px;color:#888; }
+    .mbar-track  { width:55px;height:7px;background:rgba(255,255,255,0.08);border-radius:4px;overflow:hidden; }
+    .mbar-fill   { height:100%;background:linear-gradient(90deg,#bb86fc,#03dac6);border-radius:4px;transition:width .12s;width:0%; }
+    /* Signal / latency bars */
+    .sig-bars { display:flex;align-items:flex-end;gap:3px;height:20px; }
+    .sig-bar  { width:5px;border-radius:2px;background:rgba(255,255,255,0.1);transition:background .3s; }
+    .sig-bar.s-on   { background:#00e676; }
+    .sig-bar.s-warn { background:#ffc107; }
+    .sig-bar.s-poor { background:#ff1744; }
+    .sig-bar:nth-child(1){height:4px}.sig-bar:nth-child(2){height:8px}
+    .sig-bar:nth-child(3){height:12px}.sig-bar:nth-child(4){height:16px}.sig-bar:nth-child(5){height:20px}
+    /* E-STOP */
+    .estop-btn {
+      position:fixed;top:14px;right:14px;z-index:2000;
+      padding:11px 22px;background:linear-gradient(135deg,#b71c1c,#ff1744);
+      color:#fff;font-size:15px;font-weight:900;border:3px solid #ff5252;
+      border-radius:12px;cursor:pointer;
+      box-shadow:0 0 22px rgba(255,23,68,.55);letter-spacing:1px;transition:all .15s;
+    }
+    .estop-btn:hover  { transform:scale(1.06);box-shadow:0 0 32px rgba(255,23,68,.9); }
+    .estop-btn:active { transform:scale(0.96); }
+    @keyframes estop-flash {
+      0%,100%{background:linear-gradient(135deg,#b71c1c,#ff1744);color:#fff;}
+      50%{background:#fff;color:#ff1744;}
+    }
+    .estop-btn.fired { animation:estop-flash .2s 3; }
+    /* Event Log */
+    .log-wrap {
+      max-height:200px;overflow-y:auto;background:rgba(0,0,0,0.25);
+      border-radius:8px;padding:8px;font-family:monospace;font-size:12px;
+      scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.1) transparent;
+    }
+    .log-entry {
+      display:flex;gap:10px;padding:4px 8px;border-radius:4px;margin-bottom:3px;
+      border-left:3px solid;animation:fade-in .3s ease;
+    }
+    @keyframes fade-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+    .ev-cliff  { border-color:#ff1744;background:rgba(255,23,68,.07);color:#ff8a80; }
+    .ev-safety { border-color:#ffc107;background:rgba(255,193,7,.07);color:#ffd54f; }
+    .ev-pump   { border-color:#3498db;background:rgba(52,152,219,.07);color:#90caf9; }
+    .ev-ok     { border-color:#00e676;background:rgba(0,230,118,.07);color:#a5d6a7; }
+    .log-ts    { color:#555;min-width:58px; }
+    .log-acts  { display:flex;gap:8px;margin-top:10px;justify-content:flex-end; }
+    .log-btn {
+      padding:5px 12px;font-size:11px;border:1px solid rgba(255,255,255,0.1);
+      border-radius:6px;background:rgba(255,255,255,0.05);color:#aaa;
+      cursor:pointer;transition:all .2s;
+    }
+    .log-btn:hover { background:rgba(255,255,255,0.1);color:#fff; }
   </style>
 </head>
 <body>
-  <div id="safetyBanner" class="safety-banner">⚠️ SAFETY INTERRUPT: ROBOT REPOSITIONING...</div>
-  <h1>⚙️ G7 Solar Panel Robot Dashboard</h1>
+  <div id="safetyBanner" class="safety-banner">&#x26A0;&#xFE0F; SAFETY INTERRUPT: ROBOT REPOSITIONING...</div>
+
+  <button id="btnEstop" class="estop-btn" onclick="triggerEstop()">&#x26D4; E-STOP</button>
+
+  <div class="health-bar">
+    <div id="healthPill" class="health-pill health-ok">&#x1F7E2; ALL SYSTEMS OK</div>
+    <div class="health-meta">
+      <div class="meta-item">
+        <span class="meta-value" id="uptimeVal">00:00:00</span>
+        <span>Session Uptime</span>
+      </div>
+      <div class="meta-item">
+        <div class="mbar-row"><span>L</span><div class="mbar-track"><div id="motorBarL" class="mbar-fill"></div></div></div>
+        <div class="mbar-row"><span>R</span><div class="mbar-track"><div id="motorBarR" class="mbar-fill"></div></div></div>
+        <span>Motor PWM</span>
+      </div>
+      <div class="meta-item">
+        <div class="sig-bars">
+          <div class="sig-bar" id="sig1"></div>
+          <div class="sig-bar" id="sig2"></div>
+          <div class="sig-bar" id="sig3"></div>
+          <div class="sig-bar" id="sig4"></div>
+          <div class="sig-bar" id="sig5"></div>
+        </div>
+        <span id="rttVal">-- ms</span>
+        <span>Latency</span>
+      </div>
+    </div>
+  </div>
+
+  <h1>&#x2699;&#xFE0F; G7 Solar Panel Robot Dashboard</h1>
 
   <div class="grid">
     <!-- Gamepad Card -->
@@ -564,6 +670,18 @@ const char* htmlPage = R"rawliteral(
         </div>
       </div>
     </div>
+
+    <!-- Event Log Card -->
+    <div class="card full">
+      <h2><span>&#x1F4CB;</span> Event Log</h2>
+      <div class="log-wrap" id="logContainer">
+        <div style="text-align:center;color:#444;padding:20px;font-size:12px;">No events yet. Drive the robot or trigger safety mode to see events here.</div>
+      </div>
+      <div class="log-acts">
+        <button class="log-btn" onclick="clearLogDisplay()">&#x1F5D1; Clear Display</button>
+        <button class="log-btn" onclick="downloadLogCSV()">&#x2B07; Download CSV</button>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -584,6 +702,19 @@ const char* htmlPage = R"rawliteral(
     let isRecording = false;
     let recordedSteps = [];
     let recordIntervalId = null;
+
+    // ===== New Dashboard State =====
+    let logEntries = [];
+    const sessionStart = Date.now();
+    // Uptime counter
+    setInterval(() => {
+      const sec = Math.floor((Date.now() - sessionStart) / 1000);
+      const h = String(Math.floor(sec / 3600)).padStart(2, '0');
+      const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+      const s = String(sec % 60).padStart(2, '0');
+      const el = EL('uptimeVal');
+      if (el) el.textContent = `${h}:${m}:${s}`;
+    }, 1000);
 
     window.addEventListener("gamepadconnected", (e) => {
       gamepadIndex = e.gamepad.index;
@@ -687,6 +818,7 @@ const char* htmlPage = R"rawliteral(
     const EL = id => document.getElementById(id);
 
     function pollStatus() {
+      const t0 = Date.now();
       fetch('/status')
         .then(r => r.json())
         .then(d => {
@@ -769,6 +901,11 @@ const char* htmlPage = R"rawliteral(
               timeCounterEl.textContent = `Playback: ${d.playIndex} / ${d.playLen} (${curSec}s / ${totalSec}s)`;
             }
           }
+          updateHealthBar(d);
+          updateConnectionUI(Date.now() - t0);
+          const barL = EL('motorBarL'), barR = EL('motorBarR');
+          if (barL) barL.style.width = (Math.abs(currentL) / 255 * 100).toFixed(1) + '%';
+          if (barR) barR.style.width = (Math.abs(currentR) / 255 * 100).toFixed(1) + '%';
         })
         .catch(() => {});
     }
@@ -1192,10 +1329,95 @@ const char* htmlPage = R"rawliteral(
       gpCtx.fill();
     }
 
+    // ===== E-STOP =====
+    function triggerEstop() {
+      const btn = EL('btnEstop');
+      if (btn) { btn.classList.add('fired'); setTimeout(() => btn.classList.remove('fired'), 700); }
+      fetch('/estop').catch(() => {});
+    }
+
+    // ===== System Health Bar =====
+    function updateHealthBar(d) {
+      const pill = EL('healthPill');
+      if (!pill) return;
+      const anyCliff = d.fl || d.fr || d.bl || d.br;
+      if (d.safety !== 'NORMAL') {
+        pill.className = 'health-pill health-fault';
+        pill.textContent = '\uD83D\uDD34 FAULT: ' + d.safety;
+      } else if (!d.safetyMode && anyCliff) {
+        pill.className = 'health-pill health-warn';
+        pill.textContent = '\uD83D\uDFE1 WARNING: Cliff sensor active (safety bypassed)';
+      } else {
+        pill.className = 'health-pill health-ok';
+        pill.textContent = '\uD83D\uDFE2 ALL SYSTEMS OK';
+      }
+    }
+
+    // ===== Connection Latency (RTT) =====
+    function updateConnectionUI(rtt) {
+      const el = EL('rttVal');
+      if (el) el.textContent = rtt + ' ms';
+      let bars = 0, cls = '';
+      if      (rtt < 50)  { bars = 5; cls = 's-on'; }
+      else if (rtt < 100) { bars = 4; cls = 's-on'; }
+      else if (rtt < 200) { bars = 3; cls = 's-warn'; }
+      else if (rtt < 500) { bars = 2; cls = 's-warn'; }
+      else                { bars = 1; cls = 's-poor'; }
+      for (let i = 1; i <= 5; i++) {
+        const b = EL('sig' + i);
+        if (b) b.className = 'sig-bar' + (i <= bars ? ' ' + cls : '');
+      }
+    }
+
+    // ===== Event Log =====
+    function pollLog() {
+      fetch('/log')
+        .then(r => r.json())
+        .then(data => {
+          if (data.length === logEntries.length) return;
+          logEntries = data;
+          renderLog();
+        })
+        .catch(() => {});
+    }
+
+    function renderLog() {
+      const c = EL('logContainer');
+      if (!c) return;
+      if (!logEntries.length) {
+        c.innerHTML = '<div style="text-align:center;color:#444;padding:20px;font-size:12px;">No events yet. Drive the robot or trigger safety mode.</div>';
+        return;
+      }
+      c.innerHTML = [...logEntries].reverse().map(e => {
+        const ms = e.t;
+        const h = String(Math.floor(ms / 3600000)).padStart(2, '0');
+        const m = String(Math.floor((ms % 3600000) / 60000)).padStart(2, '0');
+        const s = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
+        const up = e.msg.toUpperCase();
+        let cls = 'ev-ok';
+        if (up.includes('CLIFF') || up.includes('EVAD')) cls = 'ev-cliff';
+        else if (up.includes('STOP') || up.includes('SAFETY') || up.includes('LOCK')) cls = 'ev-safety';
+        else if (up.includes('PUMP')) cls = 'ev-pump';
+        return `<div class="log-entry ${cls}"><span class="log-ts">${h}:${m}:${s}</span><span>${e.msg}</span></div>`;
+      }).join('');
+    }
+
+    function clearLogDisplay() { logEntries = []; renderLog(); }
+
+    function downloadLogCSV() {
+      if (!logEntries.length) { alert('No log entries to download.'); return; }
+      const csv = 'Timestamp_ms,Message\n' + logEntries.map(e => `${e.t},"${e.msg.replace(/"/g, '""')}"`).join('\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], {type: 'text/csv'}));
+      a.download = 'g7_event_log.csv';
+      a.click();
+    }
+
     // Initial draw in disconnected state
     drawGamepadVisualizer();
 
     setInterval(pollStatus, 200);
+    setInterval(pollLog, 2000);
   </script>
 </body>
 </html>
@@ -1204,6 +1426,17 @@ const char* htmlPage = R"rawliteral(
 // ==================== Low-level Motor Output ====================
 // Forward declarations
 void setMotorsDirect(int left, int right);
+
+// ==================== Event Log Helper ====================
+void addLog(const char* msg) {
+  logBuffer[logHead].ts = millis();
+  strncpy(logBuffer[logHead].msg, msg, 79);
+  logBuffer[logHead].msg[79] = '\0';
+  logHead = (logHead + 1) % LOG_BUFFER_SIZE;
+  if (logCount < LOG_BUFFER_SIZE) logCount++;
+  Serial.print("[LOG] ");
+  Serial.println(msg);
+}
 
 // ==================== Safety Evasion Logic ====================
 void updateSafety() {
@@ -1228,6 +1461,7 @@ void updateSafety() {
       // Check left side cliff first (both FL & BL detect cliff)
       if (fl_cliff && bl_cliff) {
         Serial.println("Safety Interrupt: LEFT CLIFF DETECTED! Evading right...");
+        addLog("LEFT CLIFF detected - evading right");
         safetyState = STATE_LEFT_EVADE_TURN;
         safetyTimer = now;
         setMotorsDirect(255, -255); // Pivot Right (turn away from left edge)
@@ -1235,6 +1469,7 @@ void updateSafety() {
       // Check right side cliff (both FR & BR detect cliff)
       else if (fr_cliff && br_cliff) {
         Serial.println("Safety Interrupt: RIGHT CLIFF DETECTED! Evading left...");
+        addLog("RIGHT CLIFF detected - evading left");
         safetyState = STATE_RIGHT_EVADE_TURN;
         safetyTimer = now;
         setMotorsDirect(-255, 255); // Pivot Left (turn away from right edge)
@@ -1242,6 +1477,7 @@ void updateSafety() {
       // Check front cliff (FL or FR detect cliff)
       else if (fl_cliff || fr_cliff) {
         Serial.println("Safety Interrupt: FRONT CLIFF DETECTED! Reversing...");
+        addLog("FRONT CLIFF detected - reversing");
         safetyState = STATE_FRONT_EVADE;
         safetyTimer = now;
         setMotorsDirect(-255, -255); // Reverse
@@ -1249,6 +1485,7 @@ void updateSafety() {
       // Check back cliff (BL or BR detect cliff)
       else if (bl_cliff || br_cliff) {
         Serial.println("Safety Interrupt: BACK CLIFF DETECTED! Moving forward...");
+        addLog("BACK CLIFF detected - moving forward");
         safetyState = STATE_BACK_EVADE;
         safetyTimer = now;
         setMotorsDirect(255, 255); // Forward
@@ -1320,6 +1557,7 @@ void updateSafety() {
       if (now - safetyTimer >= 500) {
         if (!fl_cliff && !fr_cliff && !bl_cliff && !br_cliff) {
           Serial.println("Safety clear. Control returned to RC.");
+          addLog("Safety clear - control returned to RC");
           safetyState = STATE_NORMAL;
         } else {
           static unsigned long lastWarn = 0;
@@ -1409,6 +1647,7 @@ void setup() {
       safetyModeActive = (active == 1);
       Serial.print("Safety Mode changed: ");
       Serial.println(safetyModeActive ? "ACTIVE (Safety/Cleaning)" : "BYPASSED (Normal)");
+      addLog(safetyModeActive ? "Safety mode ENABLED (Cleaning)" : "Safety mode DISABLED (Normal RC)");
       server.send(200, "text/plain", "OK");
     } else {
       server.send(400, "text/plain", "Bad Request");
@@ -1421,9 +1660,11 @@ void setup() {
       if (active == 1) {
         setPumpState(true); // Relay active (Pump ON)
         Serial.println("Pump turned ON via set_pump");
+        addLog("Water pump turned ON");
       } else {
         setPumpState(false); // Relay inactive (Pump OFF)
         Serial.println("Pump turned OFF via set_pump");
+        addLog("Water pump turned OFF");
       }
       server.send(200, "text/plain", "OK");
     } else {
@@ -1561,10 +1802,10 @@ void setup() {
       else playStatusText = "STOPPED";
     }
 
-    char json[400];
+    char json[512];
     snprintf(json, sizeof(json),
       "{\"fl\":%s,\"fr\":%s,\"bl\":%s,\"br\":%s,\"safety\":\"%s\","
-      "\"playStatus\":\"%s\",\"playIndex\":%d,\"playLen\":%d,\"safetyMode\":%s,\"pump\":%s}",
+      "\"playStatus\":\"%s\",\"playIndex\":%d,\"playLen\":%d,\"safetyMode\":%s,\"pump\":%s,\"uptime\":%lu}",
       fl ? "true" : "false",
       fr ? "true" : "false",
       bl ? "true" : "false",
@@ -1574,8 +1815,42 @@ void setup() {
       playbackIndex,
       sequenceLength,
       safetyModeActive ? "true" : "false",
-      isPumpOn ? "true" : "false"
+      isPumpOn ? "true" : "false",
+      millis()
     );
+    server.send(200, "application/json", json);
+  });
+
+  // ===== E-STOP endpoint =====
+  server.on("/estop", HTTP_GET, []() {
+    setMotorsDirect(0, 0);
+    setPumpState(false);
+    isPlayingPlayback = false;
+    isPausedPlayback = false;
+    addLog("E-STOP activated - all motors and pump halted");
+    server.send(200, "text/plain", "OK");
+  });
+
+  // ===== Event Log endpoint =====
+  server.on("/log", HTTP_GET, []() {
+    String json = "[";
+    int start = (logCount < LOG_BUFFER_SIZE) ? 0 : logHead;
+    for (int i = 0; i < logCount; i++) {
+      int idx = (start + i) % LOG_BUFFER_SIZE;
+      if (i > 0) json += ",";
+      json += "{\"t\":";
+      json += (unsigned long)logBuffer[idx].ts;
+      json += ",\"msg\":\"";
+      const char* m = logBuffer[idx].msg;
+      while (*m) {
+        if (*m == '"') json += "\\\"";
+        else if (*m == '\\') json += "\\\\";
+        else json += *m;
+        m++;
+      }
+      json += "\"}";
+    }
+    json += "]";
     server.send(200, "application/json", json);
   });
 
