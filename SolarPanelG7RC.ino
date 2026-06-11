@@ -1,6 +1,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Wire.h>
+#include <esp_wifi.h>
 
 // ==================== WiFi AP ====================
 const char* ssid = "ESP32_Car";
@@ -81,6 +82,21 @@ bool isPlayingPlayback = false;
 bool isPausedPlayback = false;
 unsigned long lastPlaybackStepTime = 0;
 const unsigned long PLAYBACK_STEP_INTERVAL = 100; // 10 Hz (100ms)
+
+// ==================== WiFi & Latency Diagnostics ====================
+int lastLoggedRSSI = 0; // 0 = unlogged, 1 = normal, 2 = weak
+int lastLoggedRTT = 0;  // 0 = normal, 1 = high latency
+
+int getClientRSSI() {
+  wifi_sta_list_t wifi_sta_list;
+  memset(&wifi_sta_list, 0, sizeof(wifi_sta_list));
+  if (esp_wifi_ap_get_sta_list(&wifi_sta_list) == ESP_OK) {
+    if (wifi_sta_list.num > 0) {
+      return wifi_sta_list.sta[0].rssi;
+    }
+  }
+  return 0; // 0 dBm means unavailable
+}
 
 // ==================== Event Log Buffer ====================
 struct LogEntry {
@@ -497,6 +513,9 @@ const char* htmlPage = R"rawliteral(
     .ev-safety { border-color:#ffc107;background:rgba(255,193,7,.07);color:#ffd54f; }
     .ev-pump   { border-color:#3498db;background:rgba(52,152,219,.07);color:#90caf9; }
     .ev-ok     { border-color:#00e676;background:rgba(0,230,118,.07);color:#a5d6a7; }
+    .ev-wifi   { border-color:#9c27b0;background:rgba(156,39,176,.07);color:#e040fb; }
+    .ev-rec    { border-color:#e65100;background:rgba(230,81,0,.07);color:#ffb74d; }
+    .ev-play   { border-color:#00e5ff;background:rgba(0,229,255,.07);color:#84ffff; }
     .log-ts    { color:#555;min-width:58px; }
     .log-acts  { display:flex;gap:8px;margin-top:10px;justify-content:flex-end; }
     .log-btn {
@@ -534,6 +553,11 @@ const char* htmlPage = R"rawliteral(
         </div>
         <span id="rttVal">-- ms</span>
         <span>Latency</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-value" id="rssiVal">-- dBm</span>
+        <span id="clientVal" style="font-size:10px;color:#888;font-family:monospace;">0 clients</span>
+        <span>WiFi Signal</span>
       </div>
     </div>
   </div>
@@ -705,6 +729,7 @@ const char* htmlPage = R"rawliteral(
 
     // ===== New Dashboard State =====
     let logEntries = [];
+    let lastRTT = 0;
     const sessionStart = Date.now();
     // Uptime counter
     setInterval(() => {
@@ -819,9 +844,11 @@ const char* htmlPage = R"rawliteral(
 
     function pollStatus() {
       const t0 = Date.now();
-      fetch('/status')
+      fetch(`/status?rtt=${lastRTT}`)
         .then(r => r.json())
         .then(d => {
+          const currentRTT = Date.now() - t0;
+          lastRTT = currentRTT;
           updateSensorUI('sensor-fl', 'txt-fl', d.fl);
           updateSensorUI('sensor-fr', 'txt-fr', d.fr);
           updateSensorUI('sensor-bl', 'txt-bl', d.bl);
@@ -901,8 +928,28 @@ const char* htmlPage = R"rawliteral(
               timeCounterEl.textContent = `Playback: ${d.playIndex} / ${d.playLen} (${curSec}s / ${totalSec}s)`;
             }
           }
+          if (d.rssi !== undefined) {
+            const rssiValEl = EL('rssiVal');
+            if (rssiValEl) {
+              if (d.clients > 0 && d.rssi !== 0) {
+                rssiValEl.textContent = d.rssi + ' dBm';
+                if (d.rssi > -67) rssiValEl.style.color = '#00e676';
+                else if (d.rssi > -80) rssiValEl.style.color = '#ffc107';
+                else rssiValEl.style.color = '#ff1744';
+              } else {
+                rssiValEl.textContent = '--';
+                rssiValEl.style.color = '#888';
+              }
+            }
+          }
+          if (d.clients !== undefined) {
+            const clientValEl = EL('clientVal');
+            if (clientValEl) {
+              clientValEl.textContent = d.clients + ' station' + (d.clients === 1 ? '' : 's');
+            }
+          }
           updateHealthBar(d);
-          updateConnectionUI(Date.now() - t0);
+          updateConnectionUI(currentRTT);
           const barL = EL('motorBarL'), barR = EL('motorBarR');
           if (barL) barL.style.width = (Math.abs(currentL) / 255 * 100).toFixed(1) + '%';
           if (barR) barR.style.width = (Math.abs(currentR) / 255 * 100).toFixed(1) + '%';
@@ -1396,8 +1443,11 @@ const char* htmlPage = R"rawliteral(
         const up = e.msg.toUpperCase();
         let cls = 'ev-ok';
         if (up.includes('CLIFF') || up.includes('EVAD')) cls = 'ev-cliff';
-        else if (up.includes('STOP') || up.includes('SAFETY') || up.includes('LOCK')) cls = 'ev-safety';
+        else if (up.includes('STOP') || up.includes('SAFETY') || up.includes('LOCK') || up.includes('E-STOP')) cls = 'ev-safety';
         else if (up.includes('PUMP')) cls = 'ev-pump';
+        else if (up.includes('[WIFI]')) cls = 'ev-wifi';
+        else if (up.includes('[REC]')) cls = 'ev-rec';
+        else if (up.includes('[PLAY]')) cls = 'ev-play';
         return `<div class="log-entry ${cls}"><span class="log-ts">${h}:${m}:${s}</span><span>${e.msg}</span></div>`;
       }).join('');
     }
@@ -1739,6 +1789,9 @@ void setup() {
     }
     Serial.print("Uploaded preset steps: ");
     Serial.println(sequenceLength);
+    char recLog[45];
+    snprintf(recLog, sizeof(recLog), "[REC] Saved preset: %d steps", sequenceLength);
+    addLog(recLog);
     server.send(200, "text/plain", "OK");
   });
 
@@ -1751,6 +1804,7 @@ void setup() {
           isPausedPlayback = false;
           lastPlaybackStepTime = millis();
           Serial.println("Playback started/resumed");
+          addLog("[PLAY] Started/resumed playback");
           server.send(200, "text/plain", "PLAYING");
         } else {
           server.send(200, "text/plain", "NO_PRESET");
@@ -1760,6 +1814,9 @@ void setup() {
         isPlayingPlayback = false;
         setMotorsDirect(0, 0); // Stop motors but keep index
         Serial.println("Playback paused");
+        char pauseLog[45];
+        snprintf(pauseLog, sizeof(pauseLog), "[PLAY] Playback paused at step %d", playbackIndex);
+        addLog(pauseLog);
         server.send(200, "text/plain", "PAUSED");
       } else if (action == "stop") {
         isPlayingPlayback = false;
@@ -1767,6 +1824,7 @@ void setup() {
         playbackIndex = 0;
         setMotorsDirect(0, 0);
         Serial.println("Playback stopped");
+        addLog("[PLAY] Playback stopped");
         server.send(200, "text/plain", "STOPPED");
       } else if (action == "clear") {
         isPlayingPlayback = false;
@@ -1775,6 +1833,7 @@ void setup() {
         sequenceLength = 0;
         setMotorsDirect(0, 0);
         Serial.println("Playback cleared");
+        addLog("[REC] Preset cleared");
         server.send(200, "text/plain", "CLEARED");
       }
     } else {
@@ -1802,10 +1861,48 @@ void setup() {
       else playStatusText = "STOPPED";
     }
 
+    int rttParam = -1;
+    if (server.hasArg("rtt")) {
+      rttParam = server.arg("rtt").toInt();
+    }
+
+    if (rttParam > 350) {
+      if (lastLoggedRTT == 0) {
+        char latencyLog[45];
+        snprintf(latencyLog, sizeof(latencyLog), "[WiFi] High latency: %d ms", rttParam);
+        addLog(latencyLog);
+        lastLoggedRTT = 1;
+      }
+    } else if (rttParam > 0 && rttParam <= 300) {
+      if (lastLoggedRTT == 1) {
+        addLog("[WiFi] Latency normal");
+        lastLoggedRTT = 0;
+      }
+    }
+
+    int clientRSSI = getClientRSSI();
+    int stationNum = WiFi.softAPgetStationNum();
+
+    if (stationNum > 0 && clientRSSI < -80 && clientRSSI > -120) {
+      if (lastLoggedRSSI != 2) {
+        char rssiLog[45];
+        snprintf(rssiLog, sizeof(rssiLog), "[WiFi] Weak signal: %d dBm", clientRSSI);
+        addLog(rssiLog);
+        lastLoggedRSSI = 2;
+      }
+    } else if (stationNum > 0 && clientRSSI >= -75) {
+      if (lastLoggedRSSI == 2) {
+        addLog("[WiFi] Signal restored");
+        lastLoggedRSSI = 1;
+      }
+    } else if (stationNum == 0) {
+      lastLoggedRSSI = 0;
+    }
+
     char json[512];
     snprintf(json, sizeof(json),
       "{\"fl\":%s,\"fr\":%s,\"bl\":%s,\"br\":%s,\"safety\":\"%s\","
-      "\"playStatus\":\"%s\",\"playIndex\":%d,\"playLen\":%d,\"safetyMode\":%s,\"pump\":%s,\"uptime\":%lu}",
+      "\"playStatus\":\"%s\",\"playIndex\":%d,\"playLen\":%d,\"safetyMode\":%s,\"pump\":%s,\"uptime\":%lu,\"rssi\":%d,\"clients\":%d}",
       fl ? "true" : "false",
       fr ? "true" : "false",
       bl ? "true" : "false",
@@ -1816,7 +1913,9 @@ void setup() {
       sequenceLength,
       safetyModeActive ? "true" : "false",
       isPumpOn ? "true" : "false",
-      millis()
+      millis(),
+      clientRSSI,
+      stationNum
     );
     server.send(200, "application/json", json);
   });
@@ -1887,6 +1986,7 @@ void loop() {
         playbackIndex = 0;
         setMotorsDirect(0, 0);
         Serial.println("Playback complete");
+        addLog("[PLAY] Playback complete");
       }
     }
   } else if (isPlayingPlayback && safetyState != STATE_NORMAL) {
