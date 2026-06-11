@@ -1,12 +1,13 @@
 /*
-  Pump Relay Diagnostics Tool
+  Pump Relay Diagnostics Tool (HW-383 2-Channel Relay)
   
   This simple sketch is designed to test if the relay module and water pump 
   work correctly on GPIO 17 (D17).
   
-  Upload this sketch to your ESP32. It will cycle the relay ON and OFF 
-  every 5 seconds. You should hear a physical click from the relay module, 
-  and the onboard status LED on the relay module should turn on/off.
+  Since the HW-383 2-channel relay is an ACTIVE-LOW 5V relay, driving it from a 
+  3.3V ESP32 can sometimes cause issues where the relay stays permanently ON.
+  This sketch tests both standard active-low logic and the "High-Impedance Input Trick"
+  which turns off the optocoupler completely by disabling the pin drive.
   
   View the results in your Serial Monitor (baud rate: 115200).
 */
@@ -20,32 +21,34 @@ void setup() {
   Serial.println("============================================");
   Serial.println("   G7 Solar Robot Pump Relay Test Utility   ");
   Serial.println("============================================");
-  Serial.print("Configuring Pin GPIO ");
-  Serial.print(TEST_RELAY_PIN);
-  Serial.println(" as OUTPUT.");
-  
-  pinMode(TEST_RELAY_PIN, OUTPUT);
-  digitalWrite(TEST_RELAY_PIN, HIGH); // Set initial state
+  Serial.print("Testing Relay on GPIO ");
+  Serial.println(TEST_RELAY_PIN);
+}
+
+// Helper function to turn pump ON/OFF safely
+void setPump(bool turnOn) {
+  if (turnOn) {
+    pinMode(TEST_RELAY_PIN, OUTPUT);
+    digitalWrite(TEST_RELAY_PIN, LOW); // Pull LOW to turn ON
+    Serial.println(" -> STATE: ON (Output LOW)");
+  } else {
+    // Set to INPUT (high impedance) to float the pin and cut current flow,
+    // which guarantees a 5V active-low relay turns OFF completely.
+    pinMode(TEST_RELAY_PIN, INPUT);
+    Serial.println(" -> STATE: OFF (High-Impedance INPUT)");
+  }
 }
 
 void loop() {
   Serial.println("\n--- Starting Test Cycle ---");
   
-  // 1. ACTIVE LOW Test (Low signal triggers relay)
-  Serial.println("[Test 1: Active LOW] Sending LOW to Pin 17 (Pump should turn ON for 5s)...");
-  digitalWrite(TEST_RELAY_PIN, LOW);
-  delay(5000);
+  // 1. Turn Pump ON
+  Serial.print("Turning Pump ON...");
+  setPump(true);
+  delay(5000); // Wait 5 seconds
   
-  Serial.println("[Test 1: Active LOW] Sending HIGH to Pin 17 (Pump should turn OFF for 5s)...");
-  digitalWrite(TEST_RELAY_PIN, HIGH);
-  delay(5000);
-  
-  // 2. ACTIVE HIGH Test (High signal triggers relay)
-  Serial.println("[Test 2: Active HIGH] Sending HIGH to Pin 17 (Pump should turn ON for 5s)...");
-  digitalWrite(TEST_RELAY_PIN, HIGH);
-  delay(5000);
-  
-  Serial.println("[Test 2: Active HIGH] Sending LOW to Pin 17 (Pump should turn OFF for 5s)...");
-  digitalWrite(TEST_RELAY_PIN, LOW);
-  delay(5000);
+  // 2. Turn Pump OFF
+  Serial.print("Turning Pump OFF...");
+  setPump(false);
+  delay(5000); // Wait 5 seconds
 }

@@ -21,6 +21,19 @@ const int DIR_L = 19;
 const int PWM_R = 25;
 const int DIR_R = 26;
 
+bool isPumpOn = false;
+// Helper function to control Active-LOW relay pin using High-Impedance trick
+void setPumpState(bool turnOn) {
+  isPumpOn = turnOn;
+  if (turnOn) {
+    pinMode(RELAY_PIN, OUTPUT);
+    digitalWrite(RELAY_PIN, LOW); // Relay active (Pump ON)
+  } else {
+    pinMode(RELAY_PIN, INPUT);    // High impedance to turn optocoupler OFF completely
+  }
+}
+
+
 // ---- Cytron SPG20HP-34K Speed Limits ----
 // Motor: 12V 580RPM — much faster than TT motors.
 const int MAX_PWM = 60;   // ← main speed limiter (0–255)
@@ -1624,8 +1637,7 @@ void setup() {
   pinMode(DIR_R, OUTPUT);
 
   // Relay pin setup
-  pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, HIGH); // Ensure pump starts OFF
+  setPumpState(false); // Ensure pump starts OFF
 
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcAttach(PWM_L, 5000, 8);
@@ -1727,9 +1739,9 @@ void setup() {
       setMotors(leftReq, rightReq);
 
       if (pumpReq == 1) {
-        digitalWrite(RELAY_PIN, LOW); // Relay active (Pump ON)
+        setPumpState(true); // Relay active (Pump ON)
       } else {
-        digitalWrite(RELAY_PIN, HIGH); // Relay inactive (Pump OFF)
+        setPumpState(false); // Relay inactive (Pump OFF)
       }
 
       server.send(200, "text/plain", "OK");
@@ -1766,10 +1778,10 @@ void setup() {
     if (server.hasArg("active")) {
       int active = server.arg("active").toInt();
       if (active == 1) {
-        digitalWrite(RELAY_PIN, LOW); // Relay active (Pump ON)
+        setPumpState(true); // Relay active (Pump ON)
         Serial.println("Pump turned ON via set_pump");
       } else {
-        digitalWrite(RELAY_PIN, HIGH); // Relay inactive (Pump OFF)
+        setPumpState(false); // Relay inactive (Pump OFF)
         Serial.println("Pump turned OFF via set_pump");
       }
       server.send(200, "text/plain", "OK");
@@ -1932,7 +1944,7 @@ void setup() {
       Kd_Yaw,
       assistActive ? "true" : "false",
       safetyModeActive ? "true" : "false",
-      (digitalRead(RELAY_PIN) == LOW) ? "true" : "false"
+      isPumpOn ? "true" : "false"
     );
     server.send(200, "application/json", json);
   });
@@ -1965,9 +1977,9 @@ void loop() {
         // Write direct to motors and pump (supports assist)
         setMotorsDirect(lSpeed, rSpeed);
         if (pState == 1) {
-          digitalWrite(RELAY_PIN, LOW); // ON
+          setPumpState(true); // ON
         } else {
-          digitalWrite(RELAY_PIN, HIGH); // OFF
+          setPumpState(false); // OFF
         }
         
         playbackIndex++;
