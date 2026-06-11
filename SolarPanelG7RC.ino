@@ -1476,6 +1476,7 @@ const char* htmlPage = R"rawliteral(
 // ==================== Low-level Motor Output ====================
 // Forward declarations
 void setMotorsDirect(int left, int right);
+void setMotors(int left, int right);
 
 // ==================== Event Log Helper ====================
 void addLog(const char* msg) {
