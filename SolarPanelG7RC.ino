@@ -2013,7 +2013,7 @@ void setMotorsDirect(int left, int right) {
   Serial.print(" | Right: "); Serial.print(right);
   Serial.print(" | Scaled PWM: "); Serial.println(scaledRight);
 
-  digitalWrite(DIR_L, left >= 0 ? HIGH : LOW);
+  digitalWrite(DIR_L, left >= 0 ? LOW : HIGH);  // Inverted: left motor wired opposite
   digitalWrite(DIR_R, right >= 0 ? HIGH : LOW);
 
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
