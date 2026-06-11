@@ -8,7 +8,7 @@ const char* password = "password123";
 
 WebServer server(80);
 
-#define RELAY_PIN 13
+#define RELAY_PIN 17
 
 // ==================== Motor Pins ====================
 // Left motor  → GPIO 18 (PWM), 19 (DIR)
@@ -475,7 +475,11 @@ const char* htmlPage = R"rawliteral(
       <div class="safety-status-box" style="display:flex; flex-direction:column; gap:8px;">
         <div>System Status: <span id="safetyStateText" class="status-normal">NORMAL</span></div>
         <div>Safety Mode: <span id="safetyModeText" style="font-weight:bold; color:#ff5252;">BYPASSED (NORMAL)</span></div>
-        <button id="btnToggleSafety" class="pbtn" style="background:linear-gradient(135deg,#00e676,#00c853); margin:0 auto; padding:6px 12px; font-size:12px;" onclick="toggleSafetyMode()">Enable Safety/Cleaning</button>
+        <button id="btnToggleSafety" class="pbtn" style="background:linear-gradient(135deg,#00e676,#00c853); margin:0 auto 4px auto; padding:6px 12px; font-size:12px;" onclick="toggleSafetyMode()">Enable Safety/Cleaning</button>
+        <div style="border-top:1px solid rgba(255,255,255,0.08); padding-top:6px; margin-top:4px;">
+          <div>Water Pump: <span id="pumpStateText" style="font-weight:bold; color:#ff5252;">OFF</span></div>
+          <button id="btnTogglePump" class="pbtn" style="background:linear-gradient(135deg,#3498db,#2980b9); margin:6px auto 0 auto; padding:6px 12px; font-size:12px;" onclick="togglePump()">Turn Pump ON</button>
+        </div>
       </div>
     </div>
 
@@ -508,6 +512,43 @@ const char* htmlPage = R"rawliteral(
           <li>Ensure the infrared transmitter/receiver window is clean and free of dust.</li>
           <li>Use the potentiometer on the back of each FS80NK sensor to adjust the distance threshold.</li>
         </ul>
+      </div>
+    </div>
+
+    <!-- Gamepad Input Visualizer & Guide Card -->
+    <div class="card">
+      <h2><span>🎮</span> Controller Diagnostics &amp; Guide</h2>
+      <div style="display:flex; flex-direction:column; align-items:center; gap:12px;">
+        <canvas id="controllerCanvas" width="320" height="160" style="background:rgba(0,0,0,0.2); border-radius:12px; border:1px solid rgba(255,255,255,0.05); width:100%; max-width:320px;"></canvas>
+        <div style="width:100%; border-top:1px solid rgba(255,255,255,0.08); padding-top:10px;">
+          <h3 style="font-size:12px; color:#bb86fc; margin-bottom:8px;">Gamepad Command Guide:</h3>
+          <table style="width:100%; font-size:11px; color:#aaa; border-collapse:collapse; line-height:1.6;">
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.03);">
+              <td style="padding:4px 0; font-weight:bold; color:#03dac6;">Left Stick / D-Pad</td>
+              <td style="padding:4px 0; text-align:right; color:#eee;">Drive Robot (PWM Speed)</td>
+            </tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.03);">
+              <td style="padding:4px 0; font-weight:bold; color:#3498db;">Button X (Blue)</td>
+              <td style="padding:4px 0; text-align:right; color:#eee;">Water Pump ON</td>
+            </tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.03);">
+              <td style="padding:4px 0; font-weight:bold; color:#ffb300;">Button Y (Yellow)</td>
+              <td style="padding:4px 0; text-align:right; color:#eee;">Water Pump OFF</td>
+            </tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.03);">
+              <td style="padding:4px 0; font-weight:bold; color:#2ecc71;">Button A (Green)</td>
+              <td style="padding:4px 0; text-align:right; color:#eee;">Record/Stop Preset (A)</td>
+            </tr>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.03);">
+              <td style="padding:4px 0; font-weight:bold; color:#e74c3c;">Button B (Red)</td>
+              <td style="padding:4px 0; text-align:right; color:#eee;">Play/Pause Playback (B)</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 0; font-weight:bold; color:#bb86fc;">Button R1 (Bumper)</td>
+              <td style="padding:4px 0; text-align:right; color:#eee;">Toggle Safety Mode (R1)</td>
+            </tr>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -544,6 +585,7 @@ const char* htmlPage = R"rawliteral(
         document.getElementById("status").innerHTML = "Gamepad Disconnected.<br>Waiting for connection...";
         document.getElementById("status").style.color = "#ff5252";
         sendDrive(0, 0, 0);
+        drawGamepadVisualizer();
       }
     });
 
@@ -615,6 +657,7 @@ const char* htmlPage = R"rawliteral(
             }
           }
         }
+        drawGamepadVisualizer();
         requestAnimationFrame(updateLoop);
       }
     }
@@ -656,6 +699,10 @@ const char* htmlPage = R"rawliteral(
           if (d.safetyMode !== undefined) {
             safetyModeActive = d.safetyMode;
             updateSafetyModeUI(safetyModeActive);
+          }
+
+          if (d.pump !== undefined) {
+            updatePumpUI(d.pump);
           }
 
           // Playback sync (only if not recording locally)
@@ -755,6 +802,41 @@ const char* htmlPage = R"rawliteral(
           modeText.style.color = "#ff5252"; // Red
           btn.textContent = "Enable Safety/Cleaning";
           btn.style.background = "linear-gradient(135deg, #00e676, #00c853)"; // Green
+        }
+      }
+    }
+
+    let pumpActive = false;
+    function togglePump() {
+      const nextActive = pumpActive ? 0 : 1;
+      fetch(`/set_pump?active=${nextActive}`)
+        .then(r => r.text())
+        .then(txt => {
+          if (txt === "OK") {
+            pumpActive = (nextActive === 1);
+            window.pumpState = nextActive;
+            updatePumpUI(pumpActive);
+          }
+        })
+        .catch(err => console.error("Toggle pump error:", err));
+    }
+
+    function updatePumpUI(isActive) {
+      pumpActive = isActive;
+      window.pumpState = isActive ? 1 : 0;
+      const modeText = EL("pumpStateText");
+      const btn = EL("btnTogglePump");
+      if (modeText && btn) {
+        if (isActive) {
+          modeText.textContent = "ON";
+          modeText.style.color = "#00e676"; // Green
+          btn.textContent = "Turn Pump OFF";
+          btn.style.background = "linear-gradient(135deg, #ff1744, #d50000)"; // Red
+        } else {
+          modeText.textContent = "OFF";
+          modeText.style.color = "#ff5252"; // Red
+          btn.textContent = "Turn Pump ON";
+          btn.style.background = "linear-gradient(135deg, #3498db, #2980b9)"; // Blue
         }
       }
     }
@@ -883,6 +965,222 @@ const char* htmlPage = R"rawliteral(
           });
       }
     }
+
+    // =============== GAMEPAD CANVAS VISUALIZER LOGIC ===============
+    const gpCanvas = document.getElementById("controllerCanvas");
+    const gpCtx = gpCanvas.getContext("2d");
+
+    function drawGamepadVisualizer() {
+      gpCtx.clearRect(0, 0, gpCanvas.width, gpCanvas.height);
+      
+      const connected = (gamepadIndex !== null);
+      let lx = 0, ly = 0;
+      let rx = 0, ry = 0;
+      let btnA = false, btnB = false, btnX = false, btnY = false;
+      let btnL1 = false, btnR1 = false;
+      let dpadUp = false, dpadDown = false, dpadLeft = false, dpadRight = false;
+      
+      if (connected) {
+        const gamepads = navigator.getGamepads();
+        const gp = gamepads[gamepadIndex];
+        if (gp) {
+          lx = gp.axes[0] || 0;
+          ly = gp.axes[1] || 0;
+          rx = (gp.axes.length > 2) ? gp.axes[2] : gp.axes[0];
+          ry = (gp.axes.length > 3) ? gp.axes[3] : 0;
+          
+          if (Math.abs(lx) < 0.1) lx = 0;
+          if (Math.abs(ly) < 0.1) ly = 0;
+          if (Math.abs(rx) < 0.1) rx = 0;
+          if (Math.abs(ry) < 0.1) ry = 0;
+          
+          btnA = gp.buttons[0]?.pressed || false;
+          btnB = gp.buttons[1]?.pressed || false;
+          btnX = gp.buttons[2]?.pressed || false;
+          btnY = gp.buttons[3]?.pressed || false;
+          btnL1 = gp.buttons[4]?.pressed || false;
+          btnR1 = gp.buttons[5]?.pressed || false;
+          
+          dpadUp = gp.buttons[12]?.pressed || false;
+          dpadDown = gp.buttons[13]?.pressed || false;
+          dpadLeft = gp.buttons[14]?.pressed || false;
+          dpadRight = gp.buttons[15]?.pressed || false;
+          
+          if (dpadUp) ly = -1;
+          if (dpadDown) ly = 1;
+          if (dpadLeft) lx = -1;
+          if (dpadRight) lx = 1;
+        }
+      }
+      
+      const cx = 160;
+      const cy = 80;
+      
+      // L2 / R2 Triggers
+      gpCtx.fillStyle = connected ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.02)';
+      gpCtx.fillRect(cx - 90, cy - 60, 25, 15);
+      gpCtx.fillRect(cx + 65, cy - 60, 25, 15);
+      gpCtx.strokeStyle = connected ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.08)';
+      gpCtx.lineWidth = 1;
+      gpCtx.strokeRect(cx - 90, cy - 60, 25, 15);
+      gpCtx.strokeRect(cx + 65, cy - 60, 25, 15);
+      
+      // L1 / R1 Bumpers
+      gpCtx.fillStyle = btnL1 ? 'rgba(3, 218, 198, 0.4)' : (connected ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.03)');
+      gpCtx.strokeStyle = btnL1 ? '#03dac6' : (connected ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)');
+      gpCtx.beginPath();
+      if (gpCtx.roundRect) {
+        gpCtx.roundRect(cx - 95, cy - 42, 35, 10, 3);
+      } else {
+        gpCtx.rect(cx - 95, cy - 42, 35, 10);
+      }
+      gpCtx.fill();
+      gpCtx.stroke();
+      
+      gpCtx.fillStyle = btnR1 ? 'rgba(187, 134, 252, 0.5)' : (connected ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.03)');
+      gpCtx.strokeStyle = btnR1 ? '#bb86fc' : (connected ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)');
+      gpCtx.beginPath();
+      if (gpCtx.roundRect) {
+        gpCtx.roundRect(cx + 60, cy - 42, 35, 10, 3);
+      } else {
+        gpCtx.rect(cx + 60, cy - 42, 35, 10);
+      }
+      gpCtx.fill();
+      gpCtx.stroke();
+
+      gpCtx.fillStyle = connected ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)';
+      gpCtx.font = '8px monospace';
+      gpCtx.fillText("L1", cx - 85, cy - 34);
+      gpCtx.fillText("R1", cx + 75, cy - 34);
+      
+      // Gamepad Body Contour
+      gpCtx.beginPath();
+      gpCtx.moveTo(cx - 70, cy - 35);
+      gpCtx.lineTo(cx + 70, cy - 35);
+      gpCtx.quadraticCurveTo(cx + 95, cy - 35, cx + 100, cy - 20);
+      gpCtx.quadraticCurveTo(cx + 115, cy + 20, cx + 80, cy + 60);
+      gpCtx.quadraticCurveTo(cx + 60, cy + 60, cx + 50, cy + 40);
+      gpCtx.quadraticCurveTo(cx, cy + 55, cx - 50, cy + 40);
+      gpCtx.quadraticCurveTo(cx - 60, cy + 60, cx - 80, cy + 60);
+      gpCtx.quadraticCurveTo(cx - 115, cy + 20, cx - 100, cy - 20);
+      gpCtx.quadraticCurveTo(cx - 95, cy - 35, cx - 70, cy - 35);
+      gpCtx.closePath();
+      
+      gpCtx.strokeStyle = connected ? 'rgba(3, 218, 198, 0.4)' : 'rgba(255, 255, 255, 0.1)';
+      gpCtx.lineWidth = 3;
+      gpCtx.fillStyle = 'rgba(255, 255, 255, 0.02)';
+      gpCtx.fill();
+      gpCtx.stroke();
+      
+      // Analog stick bases
+      gpCtx.strokeStyle = connected ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.05)';
+      gpCtx.lineWidth = 2;
+      gpCtx.beginPath();
+      gpCtx.arc(cx - 40, cy + 15, 18, 0, Math.PI * 2);
+      gpCtx.stroke();
+      gpCtx.beginPath();
+      gpCtx.arc(cx + 40, cy + 15, 18, 0, Math.PI * 2);
+      gpCtx.stroke();
+      
+      // Analog knobs
+      gpCtx.fillStyle = connected ? 'rgba(3, 218, 198, 0.8)' : 'rgba(255,255,255,0.15)';
+      gpCtx.beginPath();
+      gpCtx.arc(cx - 40 + lx * 10, cy + 15 + ly * 10, 10, 0, Math.PI * 2);
+      gpCtx.fill();
+      
+      gpCtx.fillStyle = connected ? 'rgba(187, 134, 252, 0.8)' : 'rgba(255,255,255,0.15)';
+      gpCtx.beginPath();
+      gpCtx.arc(cx + 40 + rx * 10, cy + 15 + ry * 10, 10, 0, Math.PI * 2);
+      gpCtx.fill();
+      
+      // D-Pad Cross
+      const dpadX = cx - 75;
+      const dpadY = cy - 5;
+      gpCtx.fillStyle = connected ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.03)';
+      gpCtx.fillRect(dpadX - 6, dpadY - 18, 12, 36);
+      gpCtx.fillRect(dpadX - 18, dpadY - 6, 36, 12);
+      
+      gpCtx.fillStyle = '#03dac6';
+      if (dpadUp) gpCtx.fillRect(dpadX - 6, dpadY - 18, 12, 12);
+      if (dpadDown) gpCtx.fillRect(dpadX - 6, dpadY + 6, 12, 12);
+      if (dpadLeft) gpCtx.fillRect(dpadX - 18, dpadY - 6, 12, 12);
+      if (dpadRight) gpCtx.fillRect(dpadX + 6, dpadY - 6, 12, 12);
+      
+      gpCtx.strokeStyle = connected ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.06)';
+      gpCtx.lineWidth = 1;
+      gpCtx.beginPath();
+      gpCtx.moveTo(dpadX - 6, dpadY - 18);
+      gpCtx.lineTo(dpadX + 6, dpadY - 18);
+      gpCtx.lineTo(dpadX + 6, dpadY - 6);
+      gpCtx.lineTo(dpadX + 18, dpadY - 6);
+      gpCtx.lineTo(dpadX + 18, dpadY + 6);
+      gpCtx.lineTo(dpadX + 6, dpadY + 6);
+      gpCtx.lineTo(dpadX + 6, dpadY + 18);
+      gpCtx.lineTo(dpadX - 6, dpadY + 18);
+      gpCtx.lineTo(dpadX - 6, dpadY + 6);
+      gpCtx.lineTo(dpadX - 18, dpadY + 6);
+      gpCtx.lineTo(dpadX - 18, dpadY - 6);
+      gpCtx.lineTo(dpadX - 6, dpadY - 6);
+      gpCtx.closePath();
+      gpCtx.stroke();
+      
+      // Face Buttons (A, B, X, Y)
+      const faceX = cx + 75;
+      const faceY = cy - 5;
+      
+      // Y (Yellow)
+      gpCtx.fillStyle = btnY ? '#ffb300' : (connected ? 'rgba(255,179,0,0.2)' : 'rgba(255,255,255,0.05)');
+      gpCtx.strokeStyle = '#ffb300';
+      gpCtx.lineWidth = 1.5;
+      gpCtx.beginPath();
+      gpCtx.arc(faceX, faceY - 12, 7, 0, Math.PI * 2);
+      gpCtx.fill();
+      gpCtx.stroke();
+      gpCtx.fillStyle = btnY ? '#000' : '#ffb300';
+      gpCtx.font = 'bold 8px Arial';
+      gpCtx.textAlign = 'center';
+      gpCtx.textBaseline = 'middle';
+      gpCtx.fillText("Y", faceX, faceY - 12);
+      
+      // A (Green)
+      gpCtx.fillStyle = btnA ? '#2ecc71' : (connected ? 'rgba(46,204,113,0.2)' : 'rgba(255,255,255,0.05)');
+      gpCtx.strokeStyle = '#2ecc71';
+      gpCtx.beginPath();
+      gpCtx.arc(faceX, faceY + 12, 7, 0, Math.PI * 2);
+      gpCtx.fill();
+      gpCtx.stroke();
+      gpCtx.fillStyle = btnA ? '#000' : '#2ecc71';
+      gpCtx.fillText("A", faceX, faceY + 12);
+      
+      // X (Blue)
+      gpCtx.fillStyle = btnX ? '#3498db' : (connected ? 'rgba(52,152,219,0.2)' : 'rgba(255,255,255,0.05)');
+      gpCtx.strokeStyle = '#3498db';
+      gpCtx.beginPath();
+      gpCtx.arc(faceX - 12, faceY, 7, 0, Math.PI * 2);
+      gpCtx.fill();
+      gpCtx.stroke();
+      gpCtx.fillStyle = btnX ? '#000' : '#3498db';
+      gpCtx.fillText("X", faceX - 12, faceY);
+      
+      // B (Red)
+      gpCtx.fillStyle = btnB ? '#e74c3c' : (connected ? 'rgba(231,76,60,0.2)' : 'rgba(255,255,255,0.05)');
+      gpCtx.strokeStyle = '#e74c3c';
+      gpCtx.beginPath();
+      gpCtx.arc(faceX + 12, faceY, 7, 0, Math.PI * 2);
+      gpCtx.fill();
+      gpCtx.stroke();
+      gpCtx.fillStyle = btnB ? '#000' : '#e74c3c';
+      gpCtx.fillText("B", faceX + 12, faceY);
+      
+      // Status LED
+      gpCtx.fillStyle = connected ? '#00e676' : '#ff1744';
+      gpCtx.beginPath();
+      gpCtx.arc(cx, cy - 15, 3, 0, Math.PI * 2);
+      gpCtx.fill();
+    }
+
+    // Initial draw in disconnected state
+    drawGamepadVisualizer();
 
     setInterval(pollStatus, 200);
   </script>
@@ -1105,6 +1403,22 @@ void setup() {
     }
   });
 
+  server.on("/set_pump", HTTP_GET, []() {
+    if (server.hasArg("active")) {
+      int active = server.arg("active").toInt();
+      if (active == 1) {
+        digitalWrite(RELAY_PIN, LOW); // Relay active (Pump ON)
+        Serial.println("Pump turned ON via set_pump");
+      } else {
+        digitalWrite(RELAY_PIN, HIGH); // Relay inactive (Pump OFF)
+        Serial.println("Pump turned OFF via set_pump");
+      }
+      server.send(200, "text/plain", "OK");
+    } else {
+      server.send(400, "text/plain", "Bad Request");
+    }
+  });
+
   // --- HARDWARE DEBUG ENDPOINTS ---
   server.on("/testleft", HTTP_GET, []() {
     if (safetyState != STATE_NORMAL) {
@@ -1235,10 +1549,10 @@ void setup() {
       else playStatusText = "STOPPED";
     }
 
-    char json[350];
+    char json[400];
     snprintf(json, sizeof(json),
       "{\"fl\":%s,\"fr\":%s,\"bl\":%s,\"br\":%s,\"safety\":\"%s\","
-      "\"playStatus\":\"%s\",\"playIndex\":%d,\"playLen\":%d,\"safetyMode\":%s}",
+      "\"playStatus\":\"%s\",\"playIndex\":%d,\"playLen\":%d,\"safetyMode\":%s,\"pump\":%s}",
       fl ? "true" : "false",
       fr ? "true" : "false",
       bl ? "true" : "false",
@@ -1247,7 +1561,8 @@ void setup() {
       playStatusText,
       playbackIndex,
       sequenceLength,
-      safetyModeActive ? "true" : "false"
+      safetyModeActive ? "true" : "false",
+      (digitalRead(RELAY_PIN) == LOW) ? "true" : "false"
     );
     server.send(200, "application/json", json);
   });

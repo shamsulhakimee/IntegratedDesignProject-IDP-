@@ -17,7 +17,7 @@ This repository contains the firmware and dashboard for the G7 Solar Panel Clean
   - Joystick inputs are scaled from range `[-255..255]` to `[MIN_PWM..MAX_PWM]`.
 
 ### 2. Water Pump Relay
-- Controlled via a relay module connected to `GPIO 13` (active low).
+- Controlled via a relay module connected to `GPIO 17` (active low).
 - Managed via the gamepad dashboard (Button X turns the pump ON, Button Y turns it OFF).
 
 ### 3. Preset Recording & Playback Shortcuts
@@ -35,7 +35,7 @@ This repository contains the firmware and dashboard for the G7 Solar Panel Clean
 | **Left Motor** | Direction Control | **GPIO 19** | `HIGH` is forward, `LOW` is backward |
 | **Right Motor**| PWM Speed Control | **GPIO 25** | Connected to Cytron PWM input |
 | **Right Motor**| Direction Control | **GPIO 26** | `HIGH` is forward, `LOW` is backward |
-| **Water Pump** | Relay Signal | **GPIO 13** | Active LOW (Low turns pump ON) |
+| **Water Pump** | Relay Signal | **GPIO 17** | Active LOW (Low turns pump ON) |
 | **I2C SDA** | Data line | **GPIO 21** | Untouched/Reserved for future sensors |
 | **I2C SCL** | Clock line | **GPIO 22** | Untouched/Reserved for future sensors |
 | **Sensor FL** | Front-Left Cliff | **GPIO 32** | FS80NK Input (`INPUT_PULLUP`) |
